@@ -7,6 +7,7 @@ const CBuffer = require('CBuffer');
 const Lib = require('./lib');
 const API = require('./moneypotAPI');
 const Client = require('./Client');
+const db = require('./db');
 
 
 /** Chat server */
@@ -146,6 +147,13 @@ Server.prototype.insertMessage = function(roomName, user, text, cb) {
         text: text
     };
 
+    db.insertChatMessage({
+      uname: user.uname,
+      role: user.role,
+      text: text,
+      room_name: roomName
+    });
+
     this.rooms[roomName].history.push(message);
 
     cb(null, message);
@@ -159,11 +167,9 @@ Server.prototype.removeSocket = function(socket) {
       return;
     }
 
-    if (client) {
-        debug('[removeSocket] client: %j', client.socket.id);
-    } else {
-        debug('[removeSocket] no client found for socket.id: %j', socket.id);
-    }
+    // Client found
+
+    debug('[removeSocket] client: %j', client.socket.id);
 
     // debug('[removeSocket] client: %j', client.socket.id);
     delete this.clients[socket.id];
@@ -198,54 +204,100 @@ Server.prototype.removeSocket = function(socket) {
 
 };
 
+// cb: function(err, room)
+// Where room is object: { muteList: {}, users: {}, clients: {}, history: CBuffer(250) }
+Server.prototype.createOrFetchRoomByName = function(roomName, cb) {
+  var self = this;
+
+
+
+  debug('[createOrFetchRoomByName] self.rooms[%j]: %j', roomName, self.rooms[roomName]);
+
+  if (self.rooms[roomName]) {
+    cb(null, self.rooms[roomName]);
+    return;
+  }
+
+
+  debug('room %j did not exist, creating...', roomName);
+  db.fetchChatMessagesForRoomName(roomName, function(err, messages) {
+    // TODO: Handle err
+    // Convert messages into the format that clients expect
+    var history = (function() {
+      var presentedMessages = messages.map(function(msg) {
+        return {
+          id: msg.id,
+          user: {
+            uname: msg.uname,
+            role: msg.role
+          },
+          text: msg.text,
+          created_at: msg.created_at
+        };
+      });
+
+      var history = new CBuffer(250);
+
+      history.push.apply(history, presentedMessages);
+
+      return history;
+    })();
+
+    var roomObj = {
+      // Map of uname -> Date
+      muteList: {},
+      users: {},
+      clients: {},
+      history: history
+    };
+
+    self.rooms[roomName] = roomObj;
+
+    cb(null, roomObj);
+    return;
+  });
+
+};
+
 Server.prototype.addClient = function(socket, client, cb) {
+    var self = this;
     debug('[server] adding client. room pre-add: %j', this.rooms[client.room]);
 
-    // Create room if it doesn't yet exist
-    if (!this.rooms[client.room]) {
-        debug('room %j did not exist, creating...', client.room);
-        this.rooms[client.room] = {
-            // Map of uname -> Date
-            muteList: {},
-            users: {},
-            clients: {},
-            history: new CBuffer(250)
-        };
-    }
+    self.createOrFetchRoomByName(client.room, function(err, roomObj) {
+      // TODO: Handle err
 
-    // debug('room is now: %j', this.rooms[client.room]);
+      // TODO:Add client to rooms map (Is this TODO still valid?)
 
-    // TODO:Add client to rooms map
+      // TODO:Add user to users map if fresh (Is this TODO still valid?)
+      if (client.user) {
+          var user;
+          if (self.users[client.user.uname]) {
+              debug('[addClient] %s is not fresh', client.user.uname);
+              // user is not fresh
+              user = self.users[client.user.uname];
+              //user.clients[client.socket.id] = client;
+          } else {
+              debug('[addClient] %s is fresh', client.user.uname);
+              // user is fresh
+              user = client.user;
+              // user.clients = {};
+              // user.clients[client.socket.id] = client;
+              self.rooms[client.room].users[client.user.uname] = client.user;
+              socket.to(client.room).emit('user_joined', client.user);
+          }
 
-    // TODO:Add user to users map if fresh
-    if (client.user) {
-        var user;
-        if (this.users[client.user.uname]) {
-            debug('[addClient] %s is not fresh', client.user.uname);
-            // user is not fresh
-            user = this.users[client.user.uname];
-            //user.clients[client.socket.id] = client;
-        } else {
-            debug('[addClient] %s is fresh', client.user.uname);
-            // user is fresh
-            user = client.user;
-            // user.clients = {};
-            // user.clients[client.socket.id] = client;
-            this.rooms[client.room].users[client.user.uname] = client.user;
-            socket.to(client.room).emit('user_joined', client.user);
-        }
+          self.users[client.user.uname] = user;
+      }
 
-        this.users[client.user.uname] = user;
-    }
+      self.clients[client.socket.id] = client;
 
-    this.clients[client.socket.id] = client;
-
-    // State configured, so now send initialization payload to the
-    // client's `auth` callback.
-    var initPayload = {
-        user: client.user,
-        room: Lib.roomToArray(this.rooms[client.room])
-    };
-    cb(null, initPayload);
+      // State configured, so now send initialization payload to the
+      // client's `auth` callback.
+      var initPayload = {
+          user: client.user,
+          room: Lib.roomToArray(self.rooms[client.room])
+      };
+      cb(null, initPayload);
+    });
 
 };
