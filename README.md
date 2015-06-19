@@ -107,6 +107,8 @@ If auth is successful, the `data` response will provide you with the necessary i
 
 ## Events to listen for
 
+Important: When displaying data/messages received from the chat server, ensure cross-site scripting like `<script>alert("hello")</script>` is impossible by escaping it.
+
 - `user_joined`: Sent when a user joins the chat. Payload is an object: `{ uname: String, role: 'admin' | 'mod' | 'owner' }`.
 - `user_left`: Sent when a user leaves the chat. Payload is an object: `{ uname: String, role: 'admin' | 'mod' | 'owner' }`.
 - `user_muted`: Sent when a user is muted. Payload is an object: `{ uname: String, mins: Integer (duration in minutes), expires_at: String (ISO timestamp) }`.
